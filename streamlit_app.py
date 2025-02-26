@@ -1,56 +1,79 @@
 import streamlit as st
-from openai import OpenAI
+import ollama
+from typing import Optional
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# Ensure the required modules are installed
+try:
+    import streamlit as st
+    import ollama
+except ModuleNotFoundError as e:
+    st.error("Required module not found: {}. Please install it using 'pip install streamlit ollama'.".format(e.name))
+    raise
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+# Define the slots for job description
+def get_missing_slots(slots):
+    return [slot for slot, value in slots.items() if value is None]
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+SLOT_QUESTIONS = {
+    "job_type": "What type of job is this (e.g., Full-time, Part-time, Contract)?",
+    "tech_stack": "What technical stack is required (e.g., Python, React, AWS)?",
+    "experience": "What level of experience is needed (e.g., Junior, Mid-level, Senior)?",
+    "functionalities": "What are the main functionalities or responsibilities?",
+    "location": "What is the job location (e.g., Remote, New York, London)?",
+}
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+st.title("💼 Job Description Generator")
+st.write("Fill in the job details below, and I'll generate a professional job description for you!")
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+if "slots" not in st.session_state:
+    st.session_state.slots = {slot: None for slot in SLOT_QUESTIONS}
+    st.session_state.messages = []
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+for slot, question in SLOT_QUESTIONS.items():
+    if st.session_state.slots[slot] is None:
+        response = st.text_input(question, key=slot)
+        if response:
+            st.session_state.slots[slot] = response
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+if all(value is not None for value in st.session_state.slots.values()):
+    st.success("All job details are filled. Generating job description...")
+    prompt = f"""
+    Create a detailed professional job description based on the following information:
+    - Job Type: {st.session_state.slots['job_type']}
+    - Tech Stack: {st.session_state.slots['tech_stack']}
+    - Experience Level: {st.session_state.slots['experience']}
+    - Main Functionalities/Responsibilities: {st.session_state.slots['functionalities']}
+    - Location: {st.session_state.slots['location']}
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+    The job description should include:
+    1. Job Title (create an appropriate title)
+    2. Job Summary
+    3. Responsibilities
+    4. Requirements
+    5. Location and Job Type
+    6. Nice-to-have skills (optional, infer from tech stack)
+    """
+    
+    try:
+        response = ollama.chat(
+            model="deepseek-r1:1.5b",
             messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
+                {"role": "system", "content": "You are a professional HR assistant skilled in writing job descriptions."},
+                {"role": "user", "content": prompt}
+            ]
         )
+        job_description = response['message']['content']
+        st.session_state.messages.append({"role": "assistant", "content": job_description})
+    except Exception as e:
+        job_description = f"Error generating job description: {str(e)}"
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    st.subheader("Generated Job Description")
+    st.markdown(job_description)
+    
+    if st.button("Save to File"):
+        try:
+            with open("job_description.md", "w") as f:
+                f.write(job_description)
+            st.success("Job description saved to 'job_description.md'")
+        except Exception as e:
+            st.error(f"Failed to save file: {str(e)}")
